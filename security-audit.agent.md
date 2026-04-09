@@ -12,7 +12,7 @@ Execute each phase **in order**. Use parallel reads/searches within each phase f
 ### Phase 1 — Reconnaissance (Map the Attack Surface)
 
 1. Read the project structure (list top-level dirs, key config files)
-2. Identify the tech stack from `requirements.txt`, `package.json`, `pyproject.toml`, `Dockerfile`, `docker-compose.yml`
+2. Identify the tech stack from `requirements.txt`, `package.json`, `pyproject.toml`, `uv.lock`, `Dockerfile`, `docker-compose.yml`
 3. Map all entry points:
    - Search for route/endpoint decorators: `@app\.(get|post|put|patch|delete|websocket)`, `@router`, `app.use`, `express.Router`
    - Search for WebSocket handlers
@@ -57,12 +57,12 @@ For each category, use targeted regex searches across the **entire** codebase (n
 
 This category is handled primarily by **Phase 3 (Dependency Vulnerability Scan)** which runs live scanning tools against real vulnerability databases. In this phase, perform only the static/structural checks:
 
-- **Dependency manifest audit:** Read ALL dependency files (`requirements.txt`, `requirements-*.txt`, `package.json`, `package-lock.json`, `pyproject.toml`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `go.mod`, `Cargo.toml`, `pom.xml`, `build.gradle`). For each dependency:
+- **Dependency manifest audit:** Read ALL dependency files (`requirements.txt`, `requirements-*.txt`, `package.json`, `package-lock.json`, `pyproject.toml`, `uv.lock`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `go.mod`, `Cargo.toml`, `pom.xml`, `build.gradle`). For each dependency:
   - Check if the version is pinned (exact or minimum). Unpinned dependencies (`package` without `>=x.y`) are HIGH.
   - Flag minimum-only pins like `>=1.0.0` without an upper bound — these allow installation of any future (potentially vulnerable) version.
 - **Deprecated/unmaintained packages:** Flag packages that are known to be officially deprecated, archived, or unmaintained based on your general knowledge (e.g., `python-jose` is archived, `fuzzywuzzy` is superseded by `thefuzz`). Do NOT try to maintain an exhaustive CVE list — that is the job of the scanning tools in Phase 3.
 - **Unpinned in Dockerfiles/scripts:** Search for `pip install` or `npm install` commands in Dockerfiles, shell scripts, and CI configs that don't pin versions.
-- **Lock file presence:** Check if lock files exist (`package-lock.json`, `poetry.lock`, `Pipfile.lock`). Missing lock files mean transitive dependencies are uncontrolled.
+- **Lock file presence:** Check if lock files exist (`package-lock.json`, `poetry.lock`, `Pipfile.lock`, `uv.lock`). Missing lock files mean transitive dependencies are uncontrolled.
 
 #### A07: Identification and Authentication Failures
 - **JWT issues:** Search for JWT configuration — check algorithm (`none`, `HS256` with weak secret), expiration, secret rotation.
@@ -91,6 +91,18 @@ Run **real vulnerability scanners** against the project's dependency manifests. 
 
 **Step 1 — Python dependencies:**
 Run the following commands. Try each tool in order; use whichever is available:
+
+**Option A — `uv audit` (preferred if `uv` is available or a `uv.lock` / `pyproject.toml` is present):**
+```
+uv audit 2>&1
+```
+If the project uses a requirements file instead of `pyproject.toml`, run:
+```
+uv audit --file requirements.txt 2>&1
+```
+If `uv` is not installed, fall through to the next option.
+
+**Option B — `pip-audit`:**
 ```
 pip-audit --desc --format json -r requirements.txt 2>&1
 ```
@@ -98,7 +110,8 @@ If `pip-audit` is not installed, try:
 ```
 pip install pip-audit && pip-audit --desc --format json -r requirements.txt 2>&1
 ```
-If that also fails, try:
+
+**Option C — `safety` (last resort):**
 ```
 python -m pip install safety && safety check --json -r requirements.txt 2>&1
 ```
@@ -151,10 +164,10 @@ Scanner output alone is noise. For each Critical/High CVE reported by the tools,
 
 **Step 5 — Structural checks (no tools needed):**
 1. Check if lock files exist and are committed to version control
-2. Search for CI config files (`.github/workflows/*.yml`, `.gitlab-ci.yml`, `Jenkinsfile`, `.circleci/config.yml`) and check if they run any dependency scanning (Dependabot, Snyk, pip-audit, npm audit, osv-scanner). **Absence of automated dependency scanning in CI is a HIGH finding.**
+2. Search for CI config files (`.github/workflows/*.yml`, `.gitlab-ci.yml`, `Jenkinsfile`, `.circleci/config.yml`) and check if they run any dependency scanning (Dependabot, Snyk, pip-audit, uv audit, npm audit, osv-scanner). **Absence of automated dependency scanning in CI is a HIGH finding.**
 3. Flag any deprecated/unmaintained packages you recognize from general knowledge — these are always reportable regardless of reachability because they receive no security patches at all.
 
-**If ALL scanning tools fail to install/run**, clearly state this in the report and recommend the team set up `pip-audit` and `npm audit` in CI. Still report the structural checks from Step 5.
+**If ALL scanning tools fail to install/run**, clearly state this in the report and recommend the team set up `uv audit` (or `pip-audit`) and `npm audit` in CI. Still report the structural checks from Step 5.
 
 ### Phase 4 — Dockerfile & Deployment Review
 
